@@ -5,13 +5,15 @@
 // How it works: the wave measures where the progress bar fill really is on
 // screen every frame (world space) and draws next to it, so it doesn't matter
 // how GD scales the bar internally. The original bar (track + fill) is faded
-// out, and the trail is drawn in three passes like the vanilla wave trail:
-// dark outline, colored body, thin white core.
+// out. The whole zigzag path is drawn ahead of time as an empty track with a
+// black / white / black outline, and it fills up with the wave trail as the
+// level progresses. The wave icon is drawn on top of everything.
 
 #include <Geode/Geode.hpp>
 #include <Geode/modify/PlayLayer.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <string>
@@ -21,7 +23,7 @@
 using namespace geode::prelude;
 
 // ---------------------------------------------------------------------------
-// Tweakable constants
+// Tweakable constants (all sizes are relative to the height of the bar)
 // ---------------------------------------------------------------------------
 
 // Fraction of the bar height the zigzag spans at "Zigzag Height" 1.0.
@@ -32,10 +34,25 @@ static constexpr float ICON_NATIVE_SIZE = 30.f;
 static constexpr float ICON_BAR_RATIO = 1.1f;
 // Trail width compared to bar height at "Trail Thickness" 1.0.
 static constexpr float TRAIL_BAR_RATIO = 0.18f;
-// Outline width (each side) compared to bar height at "Outline Thickness" 1.0.
-static constexpr float OUTLINE_BAR_RATIO = 0.06f;
 // Width of the white core compared to the colored trail.
 static constexpr float CORE_RATIO = 0.4f;
+// Outline rings around the path, from the trail outwards: black, white, black.
+static constexpr float RING_INNER_BLACK = 0.035f;
+static constexpr float RING_WHITE = 0.05f;
+static constexpr float RING_OUTER_BLACK = 0.035f;
+// Gray of the empty (not yet filled) part of the path.
+static constexpr float TRACK_GRAY = 0.22f;
+// Normal wave moves at 45 degrees (slope 1), the mini wave twice as steeply.
+static constexpr float NORMAL_SLOPE = 1.f;
+static constexpr float MINI_SLOPE = 2.f;
+// The mini wave and its trail are smaller.
+static constexpr float MINI_SCALE = 0.6f;
+// The wave is moved down so it never goes past the top of the screen.
+static constexpr float SCREEN_MARGIN = 1.f;
+// Progress after which we trust the fill width to measure the full bar width.
+static constexpr float WIDTH_LOCK_PROGRESS = 0.3f;
+
+static constexpr float PI_F = 3.14159265358979f;
 
 // ---------------------------------------------------------------------------
 // Settings snapshot (read once per level so the update loop stays cheap)
@@ -49,9 +66,10 @@ struct WaveBarSettings {
     float trailThickness = 2.f;
     float trailLength = 1.f; // 0..1 of the bar
     bool useSecondaryColor = false;
-    bool outline = true;
-    float outlineThickness = 1.f;
-    bool whiteCore = true;
+    bool pathOutline = true;
+    bool solidTrail = false;
+    bool miniWave = false;
+    float verticalOffset = 0.f;
 
     static WaveBarSettings load() {
         auto mod = Mod::get();
@@ -63,9 +81,10 @@ struct WaveBarSettings {
         s.trailThickness = static_cast<float>(mod->getSettingValue<double>("trail-thickness"));
         s.trailLength = static_cast<float>(mod->getSettingValue<double>("trail-length")) / 100.f;
         s.useSecondaryColor = mod->getSettingValue<std::string>("trail-color") == "Secondary";
-        s.outline = mod->getSettingValue<bool>("trail-outline");
-        s.outlineThickness = static_cast<float>(mod->getSettingValue<double>("outline-thickness"));
-        s.whiteCore = mod->getSettingValue<bool>("white-core");
+        s.pathOutline = mod->getSettingValue<bool>("trail-outline");
+        s.solidTrail = mod->getSettingValue<bool>("solid-trail");
+        s.miniWave = mod->getSettingValue<bool>("mini-wave");
+        s.verticalOffset = static_cast<float>(mod->getSettingValue<double>("vertical-offset"));
         return s;
     }
 };
@@ -78,17 +97,20 @@ class WaveBar : public CCNode {
 protected:
     enum class Mode { Unknown, Fill, Track };
 
-    // Once we have worked out how the bar behaves, remember it for later levels
-    // so the wave shows up instantly.
+    // Things we learn about the bar are remembered for later levels, so the
+    // wave shows up instantly and the path doesn't change size mid-level.
     inline static Mode s_knownMode = Mode::Unknown;
+    inline static float s_widthRatio = 0.f; // full bar width / bar height
 
     CCNode* m_ref = nullptr; // the node GD resizes with progress (m_progressBar)
 
-    CCDrawNode* m_trail = nullptr;
-    SimplePlayer* m_icon = nullptr;
+    CCDrawNode* m_track = nullptr; // empty path + outline (bottom)
+    CCDrawNode* m_trail = nullptr; // filled part of the path (middle)
+    SimplePlayer* m_icon = nullptr; // wave icon (top)
 
     WaveBarSettings m_settings;
     ccColor4F m_trailColor = {1.f, 1.f, 1.f, 1.f};
+    float m_slope = NORMAL_SLOPE;
 
     // Is m_ref the growing fill (Fill), or the full bar (Track)? Figured out at
     // runtime by watching whether its width changes with progress.
@@ -96,10 +118,12 @@ protected:
     bool m_haveSample = false;
     float m_sampleP = 0.f;
     float m_sampleW = 0.f;
-    bool m_originalHidden = false;
+    float m_fallbackWidth = 0.f;
+    float m_grooveWidth = 0.f;
+    bool m_originalScanned = false;
 
     // Zigzag turning points in screen units: x = distance along the bar,
-    // y = offset from the bar's center line. Every segment has slope 1 (45 deg).
+    // y = offset from the bar's center line.
     std::vector<CCPoint> m_path;
     float m_range = 0.f; // total height of the zigzag
     uint32_t m_seed = 0;
@@ -107,6 +131,7 @@ protected:
     int m_dir = 1;
     float m_curY = 0.f;
 
+    std::array<float, 11> m_trackKey = {};
     bool m_loggedFrame = false;
 
     bool init(CCNode* ref, uint32_t seed, WaveBarSettings const& settings) {
@@ -116,6 +141,7 @@ protected:
         m_settings = settings;
         m_seed = seed;
         m_mode = s_knownMode;
+        m_slope = settings.miniWave ? MINI_SLOPE : NORMAL_SLOPE;
 
         auto gm = GameManager::get();
 
@@ -123,10 +149,13 @@ protected:
         auto c = gm->colorForIdx(settings.useSecondaryColor ? gm->getPlayerColor2() : gm->getPlayerColor());
         m_trailColor = {c.r / 255.f, c.g / 255.f, c.b / 255.f, 1.f};
 
+        m_track = CCDrawNode::create();
+        this->addChild(m_track, 0);
+
         m_trail = CCDrawNode::create();
         this->addChild(m_trail, 1);
 
-        // The wave icon the player has equipped.
+        // The wave icon the player has equipped. Always above the path.
         m_icon = SimplePlayer::create(gm->getPlayerDart());
         m_icon->updatePlayerFrame(gm->getPlayerDart(), IconType::Wave);
         m_icon->setColor(gm->colorForIdx(gm->getPlayerColor()));
@@ -152,7 +181,7 @@ protected:
         return true;
     }
 
-    // ----- hiding the original bar -----------------------------------------
+    // ----- finding / hiding the original bar -------------------------------
 
     bool isAncestorOfThis(CCNode* n) {
         for (CCNode* p = this->getParent(); p; p = p->getParent()) {
@@ -162,8 +191,8 @@ protected:
     }
 
     // Is this node shaped and placed like the progress bar (long, thin, and
-    // sitting on top of the fill)?
-    bool looksLikeBar(CCNode* n, CCPoint const& fillOrigin, float fillHeight) const {
+    // sitting on top of the fill)? Optionally reports its width in world units.
+    bool looksLikeBar(CCNode* n, CCPoint const& fillOrigin, float fillHeight, float* outWidth) const {
         auto const s = n->getContentSize();
         if (s.width < 1.f || s.height < 1.f) return false;
 
@@ -179,6 +208,8 @@ protected:
         float const centerY = fillOrigin.y + fillHeight / 2.f;
         if (centerY < o.y - 1.f || centerY > o.y + h + 1.f) return false;
         if (fillOrigin.x < o.x - 2.f || fillOrigin.x > o.x + w + 2.f) return false;
+
+        if (outWidth) *outWidth = w;
         return true;
     }
 
@@ -198,7 +229,9 @@ protected:
         }
     }
 
-    void hideOriginalBar(CCPoint const& fillOrigin, float fillHeight) {
+    // Finds the original bar's pieces, measures its track, and (optionally)
+    // fades them out.
+    void scanOriginalBar(CCPoint const& fillOrigin, float fillHeight, bool hide) {
         std::vector<CCNode*> candidates;
         candidates.push_back(m_ref);
 
@@ -207,26 +240,29 @@ protected:
         CCNode* a = m_ref->getParent();
         for (int i = 0; a && i < 3; ++i, a = a->getParent()) {
             candidates.push_back(a);
-            if (i == 0) {
-                if (auto kids = a->getChildren()) {
-                    for (auto k : CCArrayExt<CCNode*>(kids)) candidates.push_back(k);
-                }
-            }
-            if (i == 1) {
+            if (i <= 1) {
                 if (auto kids = a->getChildren()) {
                     for (auto k : CCArrayExt<CCNode*>(kids)) candidates.push_back(k);
                 }
             }
         }
 
-        int hidden = 0;
+        int count = 0;
         for (auto n : candidates) {
             if (n == this || this->isAncestorOfThis(n)) continue;
-            if (n != m_ref && !this->looksLikeBar(n, fillOrigin, fillHeight)) continue;
-            this->fadeOut(n);
-            ++hidden;
+
+            if (n != m_ref) {
+                float w = 0.f;
+                if (!this->looksLikeBar(n, fillOrigin, fillHeight, &w)) continue;
+                m_grooveWidth = std::max(m_grooveWidth, w);
+            }
+            if (hide) this->fadeOut(n);
+            ++count;
         }
-        log::info("[WaveBar] faded out {} node(s) of the original bar", hidden);
+        log::info(
+            "[WaveBar] found {} node(s) of the original bar (hidden={}), track width={}",
+            count, hide, m_grooveWidth
+        );
     }
 
     // ----- zigzag path ------------------------------------------------------
@@ -252,17 +288,20 @@ protected:
         float const minSegment = std::max(1.f, m_range * 0.25f);
 
         while (m_path.back().x < d + m_range * 2.f) {
-            float const maxLen = m_dir > 0 ? (yMax - m_curY) : (m_curY - yMin);
-            float len = maxLen;
+            // How far up/down can we go before hitting the edge?
+            float const maxRise = m_dir > 0 ? (yMax - m_curY) : (m_curY - yMin);
+            float rise = maxRise;
 
             if (m_settings.chaotic) {
-                float const lo = std::min(minSegment, maxLen);
-                len = lo + this->rnd() * (maxLen - lo);
+                float const lo = std::min(minSegment, maxRise);
+                rise = lo + this->rnd() * (maxRise - lo);
             }
-            len = std::max(len, 0.25f);
+            rise = std::max(rise, 0.25f);
 
-            float const x = m_path.back().x + len;
-            m_curY = std::clamp(m_curY + m_dir * len, yMin, yMax);
+            // slope 1 = 45 degrees, slope 2 = twice as steep (mini wave)
+            float const run = rise / m_slope;
+            float const x = m_path.back().x + run;
+            m_curY = std::clamp(m_curY + m_dir * rise, yMin, yMax);
             m_path.push_back(ccp(x, m_curY));
             m_dir = -m_dir;
         }
@@ -283,6 +322,17 @@ protected:
         auto const& b = m_path[i + 1];
         float t = (b.x - a.x) > 0.0001f ? (x - a.x) / (b.x - a.x) : 0.f;
         return a.y + (b.y - a.y) * std::clamp(t, 0.f, 1.f);
+    }
+
+    // The path between two distances along the bar: start, every turn, end.
+    std::vector<CCPoint> pathBetween(float from, float to) const {
+        std::vector<CCPoint> pts;
+        pts.push_back(ccp(from, this->yAt(from)));
+        for (auto const& v : m_path) {
+            if (v.x > from && v.x < to) pts.push_back(v);
+        }
+        pts.push_back(ccp(to, this->yAt(to)));
+        return pts;
     }
 
 public:
@@ -345,80 +395,119 @@ public:
             );
             this->setVisible(true);
         }
+        if (m_haveSample && m_sampleP > 0.f) {
+            m_fallbackWidth = m_sampleW / m_sampleP;
+        }
 
-        // Fade out the original bar (track and fill) once we know where it is.
-        if (!m_originalHidden) {
-            m_originalHidden = true;
-            if (m_settings.hideOriginal) {
-                this->hideOriginalBar(origin, barHeight);
+        // Measure the original bar and fade it out, once we know where it is.
+        if (!m_originalScanned) {
+            m_originalScanned = true;
+            this->scanOriginalBar(origin, barHeight, m_settings.hideOriginal);
+        }
+
+        // ----- how wide is the whole bar? --------------------------------
+        float totalWidth = fillWidth;
+        if (m_mode == Mode::Fill) {
+            // Learn the real full width once the fill is long enough to measure it
+            // well, and remember it for the next levels.
+            if (s_widthRatio <= 0.f && progress >= WIDTH_LOCK_PROGRESS) {
+                s_widthRatio = (fillWidth / progress) / barHeight;
+                log::info("[WaveBar] measured full bar width = {} x bar height", s_widthRatio);
+            }
+            if (s_widthRatio > 0.f) {
+                totalWidth = s_widthRatio * barHeight;
+            } else if (m_grooveWidth > 0.f) {
+                totalWidth = m_grooveWidth;
+            } else if (m_fallbackWidth > 0.f) {
+                totalWidth = m_fallbackWidth;
             }
         }
-
-        float const centerY = origin.y + barHeight / 2.f;
-        if (m_range <= 0.f) {
-            this->startPath(barHeight * BAR_USABLE_HEIGHT * m_settings.zigzagHeight);
-        }
+        totalWidth = std::max(totalWidth, 1.f);
 
         // Where is the head of the wave, measured along the bar from its left edge?
-        float head = 0.f;
-        float totalWidth = 0.f;
-        if (m_mode == Mode::Fill) {
-            head = fillWidth;
-            totalWidth = progress > 0.005f ? fillWidth / progress : fillWidth;
-        } else {
-            head = progress * fillWidth;
-            totalWidth = fillWidth;
-        }
-        head = std::max(0.f, head);
+        float head = (m_mode == Mode::Fill) ? fillWidth : progress * fillWidth;
+        head = std::clamp(head, 0.f, totalWidth);
 
         float const startD = m_settings.trailLength >= 0.999f
             ? 0.f
             : std::max(0.f, head - m_settings.trailLength * totalWidth);
 
-        this->extendTo(head);
+        // ----- sizes (world units) ---------------------------------------
+        float const mini = m_settings.miniWave ? MINI_SCALE : 1.f;
+        float const trailR = barHeight * TRAIL_BAR_RATIO * m_settings.trailThickness * mini / 2.f;
+        float const ringInner = trailR + barHeight * RING_INNER_BLACK;
+        float const ringWhite = ringInner + barHeight * RING_WHITE;
+        float const ringOuter = ringWhite + barHeight * RING_OUTER_BLACK;
+        float const iconSize = barHeight * ICON_BAR_RATIO * m_settings.iconScale * mini;
 
-        // Collect the trail polyline in world units: start, every turn, head.
-        std::vector<CCPoint> pts;
-        pts.reserve(m_path.size());
-        pts.push_back(ccp(startD, this->yAt(startD)));
-        for (auto const& v : m_path) {
-            if (v.x > startD && v.x < head) pts.push_back(v);
+        if (m_range <= 0.f) {
+            this->startPath(barHeight * BAR_USABLE_HEIGHT * m_settings.zigzagHeight);
         }
-        pts.push_back(ccp(head, this->yAt(head)));
+        this->extendTo(totalWidth);
 
-        std::vector<CCPoint> local;
-        local.reserve(pts.size());
-        for (auto const& p : pts) {
-            local.push_back(this->convertToNodeSpace(ccp(origin.x + p.x, centerY + p.y)));
-        }
+        // ----- vertical position -----------------------------------------
+        float centerY = origin.y + barHeight / 2.f - m_settings.verticalOffset * barHeight;
 
-        // Three passes, like the vanilla wave trail: dark outline, colored body,
-        // thin white core. Each pass is drawn over the previous one.
-        float const trailRadius = (barHeight * TRAIL_BAR_RATIO * m_settings.trailThickness / 2.f) / unit;
-        float const outlineRadius =
-            trailRadius + (barHeight * OUTLINE_BAR_RATIO * m_settings.outlineThickness) / unit;
-        float const coreRadius = trailRadius * CORE_RATIO;
+        // Keep everything (outline and icon) inside the top of the screen.
+        float const winHeight = CCDirector::get()->getWinSize().height;
+        float const topExtent = m_range / 2.f + std::max(m_settings.pathOutline ? ringOuter : trailR, iconSize * 0.6f);
+        float const overflow = centerY + topExtent + SCREEN_MARGIN - winHeight;
+        if (overflow > 0.f) centerY -= overflow;
 
-        auto drawPass = [&](float radius, ccColor4F const& color) {
-            for (size_t i = 0; i + 1 < local.size(); ++i) {
-                m_trail->drawSegment(local[i], local[i + 1], radius, color);
+        auto toLocal = [&](CCPoint const& p) {
+            return this->convertToNodeSpace(ccp(origin.x + p.x, centerY + p.y));
+        };
+        auto localPath = [&](float from, float to) {
+            std::vector<CCPoint> out;
+            for (auto const& p : this->pathBetween(from, to)) out.push_back(toLocal(p));
+            return out;
+        };
+        auto drawPass = [&](CCDrawNode* node, std::vector<CCPoint> const& pts, float radiusWorld, ccColor4F const& color) {
+            float const r = radiusWorld / unit;
+            for (size_t i = 0; i + 1 < pts.size(); ++i) {
+                node->drawSegment(pts[i], pts[i + 1], r, color);
             }
         };
 
-        m_trail->clear();
-        if (m_settings.outline) drawPass(outlineRadius, ccc4f(0.f, 0.f, 0.f, 1.f));
-        drawPass(trailRadius, m_trailColor);
-        if (m_settings.whiteCore) drawPass(coreRadius, ccc4f(1.f, 1.f, 1.f, 1.f));
+        // ----- the empty path with its outline (only redrawn when needed) ---
+        std::array<float, 11> const key = {
+            totalWidth, origin.x, centerY, w0.x, w0.y, unit, trailR, ringOuter,
+            m_settings.pathOutline ? 1.f : 0.f, m_slope, barHeight
+        };
+        bool dirty = false;
+        for (size_t i = 0; i < key.size(); ++i) {
+            if (std::abs(key[i] - m_trackKey[i]) > 0.01f) dirty = true;
+        }
+        if (dirty) {
+            m_trackKey = key;
+            m_track->clear();
+            if (m_settings.pathOutline) {
+                auto full = localPath(0.f, totalWidth);
+                // outside to inside: black, white, black, then the empty gray path
+                drawPass(m_track, full, ringOuter, ccc4f(0.f, 0.f, 0.f, 1.f));
+                drawPass(m_track, full, ringWhite, ccc4f(1.f, 1.f, 1.f, 1.f));
+                drawPass(m_track, full, ringInner, ccc4f(0.f, 0.f, 0.f, 1.f));
+                drawPass(m_track, full, trailR, ccc4f(TRACK_GRAY, TRACK_GRAY, TRACK_GRAY, 1.f));
+            }
+        }
 
-        // Wave icon: sized relative to the bar, pointing along the current direction.
-        float const iconScale =
-            (barHeight * ICON_BAR_RATIO / ICON_NATIVE_SIZE) * m_settings.iconScale / unit;
+        // ----- the filled part: colored trail with an optional white line ----
+        auto filled = localPath(startD, head);
+        m_trail->clear();
+        drawPass(m_trail, filled, trailR, m_trailColor);
+        if (!m_settings.solidTrail) {
+            drawPass(m_trail, filled, trailR * CORE_RATIO, ccc4f(1.f, 1.f, 1.f, 1.f));
+        }
+
+        // ----- wave icon: on top of everything, pointing along the path -----
+        float const iconScale = (iconSize / ICON_NATIVE_SIZE) / unit;
         size_t const seg = this->segmentAt(head);
         bool const goingUp = m_path[seg + 1].y > m_path[seg].y;
+        float const angle = std::atan(m_slope) * 180.f / PI_F;
 
         m_icon->setScale(iconScale);
-        m_icon->setPosition(local.back());
-        m_icon->setRotation(goingUp ? -45.f : 45.f);
+        m_icon->setPosition(filled.back());
+        m_icon->setRotation(goingUp ? -angle : angle);
     }
 };
 
