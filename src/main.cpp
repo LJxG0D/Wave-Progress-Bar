@@ -5,9 +5,13 @@
 // How it works: the wave measures where the progress bar fill really is on
 // screen every frame (world space) and draws next to it, so it doesn't matter
 // how GD scales the bar internally. The original bar (track + fill) is faded
-// out. The whole zigzag path is drawn ahead of time as an empty track with a
-// black / white / black outline, and it fills up with the wave trail as the
-// level progresses. The wave icon is drawn on top of everything.
+// out. The whole zigzag path is drawn ahead of time as an empty, transparent
+// track with a black / white / black outline, and it fills up with the wave
+// trail as the level progresses. The wave icon is drawn on top of everything.
+//
+// The path is drawn with exact polygons (a rectangle per segment and a mitered
+// wedge at every turn) instead of GD's rounded line segments, so the corners
+// stay clean at any slope, including the steeper mini wave.
 
 #include <Geode/Geode.hpp>
 #include <Geode/modify/PlayLayer.hpp>
@@ -37,11 +41,8 @@ static constexpr float TRAIL_BAR_RATIO = 0.18f;
 // Width of the white core compared to the colored trail.
 static constexpr float CORE_RATIO = 0.4f;
 // Outline rings around the path, from the trail outwards: black, white, black.
-static constexpr float RING_INNER_BLACK = 0.035f;
+static constexpr float RING_BLACK = 0.04f;
 static constexpr float RING_WHITE = 0.05f;
-static constexpr float RING_OUTER_BLACK = 0.035f;
-// Gray of the empty (not yet filled) part of the path.
-static constexpr float TRACK_GRAY = 0.22f;
 // Normal wave moves at 45 degrees (slope 1), the mini wave twice as steeply.
 static constexpr float NORMAL_SLOPE = 1.f;
 static constexpr float MINI_SLOPE = 2.f;
@@ -51,8 +52,98 @@ static constexpr float MINI_SCALE = 0.6f;
 static constexpr float SCREEN_MARGIN = 1.f;
 // Progress after which we trust the fill width to measure the full bar width.
 static constexpr float WIDTH_LOCK_PROGRESS = 0.3f;
+// Corners sharper than this (ratio of miter length to line half-width) are
+// cut flat instead of pointed. The mini wave is about 2.2, so this keeps it pointed.
+static constexpr float MITER_LIMIT = 4.f;
+// Paths are drawn this many times larger and the node is scaled back down.
+// This keeps the anti-aliased edges of CCDrawNode polygons thin and crisp.
+static constexpr float DRAW_SCALE = 4.f;
 
 static constexpr float PI_F = 3.14159265358979f;
+
+// ---------------------------------------------------------------------------
+// Polygon helpers
+// ---------------------------------------------------------------------------
+
+// Fill a convex polygon (points in local units).
+static void fillPolygon(CCDrawNode* node, std::vector<CCPoint> poly, ccColor4F const& color) {
+    if (poly.size() < 3) return;
+
+    // Make the winding counter-clockwise, skip degenerate shapes.
+    float area = 0.f;
+    for (size_t i = 0; i < poly.size(); ++i) {
+        auto const& a = poly[i];
+        auto const& b = poly[(i + 1) % poly.size()];
+        area += a.x * b.y - b.x * a.y;
+    }
+    if (std::abs(area) < 1e-6f) return;
+    if (area < 0.f) std::reverse(poly.begin(), poly.end());
+
+    for (auto& p : poly) {
+        p.x *= DRAW_SCALE;
+        p.y *= DRAW_SCALE;
+    }
+    node->drawPolygon(poly.data(), static_cast<unsigned int>(poly.size()), color, 0.f, ccc4f(0.f, 0.f, 0.f, 0.f));
+}
+
+// Draw a thick line along a polyline: a rectangle for every segment, plus a
+// mitered wedge on the outside of every turn. Overlaps are harmless because
+// everything is one solid color.
+static void strokePolyline(CCDrawNode* node, std::vector<CCPoint> const& pts, float radius, ccColor4F const& color) {
+    if (pts.size() < 2 || radius <= 0.f) return;
+
+    size_t const n = pts.size();
+    std::vector<CCPoint> dir(n - 1);
+    std::vector<bool> valid(n - 1, false);
+
+    for (size_t i = 0; i + 1 < n; ++i) {
+        float dx = pts[i + 1].x - pts[i].x;
+        float dy = pts[i + 1].y - pts[i].y;
+        float len = std::hypot(dx, dy);
+        if (len < 1e-5f) continue;
+        dir[i] = ccp(dx / len, dy / len);
+        valid[i] = true;
+
+        CCPoint nrm = ccp(-dir[i].y, dir[i].x);
+        fillPolygon(node, {
+            ccp(pts[i].x + nrm.x * radius, pts[i].y + nrm.y * radius),
+            ccp(pts[i + 1].x + nrm.x * radius, pts[i + 1].y + nrm.y * radius),
+            ccp(pts[i + 1].x - nrm.x * radius, pts[i + 1].y - nrm.y * radius),
+            ccp(pts[i].x - nrm.x * radius, pts[i].y - nrm.y * radius),
+        }, color);
+    }
+
+    // Joints
+    for (size_t k = 1; k + 1 < n; ++k) {
+        if (!valid[k - 1] || !valid[k]) continue;
+
+        CCPoint const& d0 = dir[k - 1];
+        CCPoint const& d1 = dir[k];
+        float const cross = d0.x * d1.y - d0.y * d1.x;
+        if (std::abs(cross) < 1e-4f) continue; // straight, nothing to fill
+
+        // The gap opens on the outside of the turn.
+        float const side = cross > 0.f ? -1.f : 1.f;
+        CCPoint const n0 = ccp(-d0.y, d0.x);
+        CCPoint const n1 = ccp(-d1.y, d1.x);
+        CCPoint const p = pts[k];
+
+        CCPoint const a = ccp(p.x + side * n0.x * radius, p.y + side * n0.y * radius);
+        CCPoint const b = ccp(p.x + side * n1.x * radius, p.y + side * n1.y * radius);
+
+        float const denom = 1.f + (n0.x * n1.x + n0.y * n1.y);
+        if (denom > 0.05f) {
+            CCPoint const m = ccp((n0.x + n1.x) / denom, (n0.y + n1.y) / denom);
+            float const ratio = std::hypot(m.x, m.y);
+            if (ratio <= MITER_LIMIT) {
+                CCPoint const tip = ccp(p.x + side * m.x * radius, p.y + side * m.y * radius);
+                fillPolygon(node, {p, a, tip, b}, color);
+                continue;
+            }
+        }
+        fillPolygon(node, {p, a, b}, color); // too sharp: cut the corner flat
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Settings snapshot (read once per level so the update loop stays cheap)
@@ -104,9 +195,16 @@ protected:
 
     CCNode* m_ref = nullptr; // the node GD resizes with progress (m_progressBar)
 
-    CCDrawNode* m_track = nullptr; // empty path + outline (bottom)
-    CCDrawNode* m_trail = nullptr; // filled part of the path (middle)
-    SimplePlayer* m_icon = nullptr; // wave icon (top)
+    // Layers, bottom to top:
+    //  m_clip    cuts the inside of the path out of the outline (transparent middle)
+    //   m_track  black / white / black outline of the whole path
+    //  m_trail   the filled part of the path
+    //  m_icon    the wave icon
+    CCClippingNode* m_clip = nullptr;
+    CCDrawNode* m_stencil = nullptr;
+    CCDrawNode* m_track = nullptr;
+    CCDrawNode* m_trail = nullptr;
+    SimplePlayer* m_icon = nullptr;
 
     WaveBarSettings m_settings;
     ccColor4F m_trailColor = {1.f, 1.f, 1.f, 1.f};
@@ -149,10 +247,20 @@ protected:
         auto c = gm->colorForIdx(settings.useSecondaryColor ? gm->getPlayerColor2() : gm->getPlayerColor());
         m_trailColor = {c.r / 255.f, c.g / 255.f, c.b / 255.f, 1.f};
 
-        m_track = CCDrawNode::create();
-        this->addChild(m_track, 0);
+        // Outline layer: everything inside the path is cut out (inverted clip).
+        m_stencil = CCDrawNode::create();
+        m_stencil->setScale(1.f / DRAW_SCALE);
+        m_clip = CCClippingNode::create(m_stencil);
+        m_clip->setInverted(true);
+        this->addChild(m_clip, 0);
 
+        m_track = CCDrawNode::create();
+        m_track->setScale(1.f / DRAW_SCALE);
+        m_clip->addChild(m_track);
+
+        // Filled part of the path.
         m_trail = CCDrawNode::create();
+        m_trail->setScale(1.f / DRAW_SCALE);
         this->addChild(m_trail, 1);
 
         // The wave icon the player has equipped. Always above the path.
@@ -435,9 +543,9 @@ public:
         // ----- sizes (world units) ---------------------------------------
         float const mini = m_settings.miniWave ? MINI_SCALE : 1.f;
         float const trailR = barHeight * TRAIL_BAR_RATIO * m_settings.trailThickness * mini / 2.f;
-        float const ringInner = trailR + barHeight * RING_INNER_BLACK;
+        float const ringInner = trailR + barHeight * RING_BLACK;
         float const ringWhite = ringInner + barHeight * RING_WHITE;
-        float const ringOuter = ringWhite + barHeight * RING_OUTER_BLACK;
+        float const ringOuter = ringWhite + barHeight * RING_BLACK;
         float const iconSize = barHeight * ICON_BAR_RATIO * m_settings.iconScale * mini;
 
         if (m_range <= 0.f) {
@@ -448,9 +556,12 @@ public:
         // ----- vertical position -----------------------------------------
         float centerY = origin.y + barHeight / 2.f - m_settings.verticalOffset * barHeight;
 
-        // Keep everything (outline and icon) inside the top of the screen.
+        // Keep everything (outline corners and icon) inside the top of the screen.
+        // The pointed corners of the path stick out by radius * sqrt(1 + slope^2).
+        float const cornerReach = std::sqrt(1.f + m_slope * m_slope);
+        float const pathReach = (m_settings.pathOutline ? ringOuter : trailR) * cornerReach;
         float const winHeight = CCDirector::get()->getWinSize().height;
-        float const topExtent = m_range / 2.f + std::max(m_settings.pathOutline ? ringOuter : trailR, iconSize * 0.6f);
+        float const topExtent = m_range / 2.f + std::max(pathReach, iconSize * 0.6f);
         float const overflow = centerY + topExtent + SCREEN_MARGIN - winHeight;
         if (overflow > 0.f) centerY -= overflow;
 
@@ -461,12 +572,6 @@ public:
             std::vector<CCPoint> out;
             for (auto const& p : this->pathBetween(from, to)) out.push_back(toLocal(p));
             return out;
-        };
-        auto drawPass = [&](CCDrawNode* node, std::vector<CCPoint> const& pts, float radiusWorld, ccColor4F const& color) {
-            float const r = radiusWorld / unit;
-            for (size_t i = 0; i + 1 < pts.size(); ++i) {
-                node->drawSegment(pts[i], pts[i + 1], r, color);
-            }
         };
 
         // ----- the empty path with its outline (only redrawn when needed) ---
@@ -480,23 +585,29 @@ public:
         }
         if (dirty) {
             m_trackKey = key;
+            m_stencil->clear();
             m_track->clear();
             if (m_settings.pathOutline) {
                 auto full = localPath(0.f, totalWidth);
-                // outside to inside: black, white, black, then the empty gray path
-                drawPass(m_track, full, ringOuter, ccc4f(0.f, 0.f, 0.f, 1.f));
-                drawPass(m_track, full, ringWhite, ccc4f(1.f, 1.f, 1.f, 1.f));
-                drawPass(m_track, full, ringInner, ccc4f(0.f, 0.f, 0.f, 1.f));
-                drawPass(m_track, full, trailR, ccc4f(TRACK_GRAY, TRACK_GRAY, TRACK_GRAY, 1.f));
+                float const r = 1.f / unit;
+                ccColor4F const black = ccc4f(0.f, 0.f, 0.f, 1.f);
+                ccColor4F const white = ccc4f(1.f, 1.f, 1.f, 1.f);
+
+                // The inside of the path is cut out of the outline, so it stays transparent.
+                strokePolyline(m_stencil, full, trailR * r, white);
+                // outside to inside: black, white, black
+                strokePolyline(m_track, full, ringOuter * r, black);
+                strokePolyline(m_track, full, ringWhite * r, white);
+                strokePolyline(m_track, full, ringInner * r, black);
             }
         }
 
         // ----- the filled part: colored trail with an optional white line ----
         auto filled = localPath(startD, head);
         m_trail->clear();
-        drawPass(m_trail, filled, trailR, m_trailColor);
+        strokePolyline(m_trail, filled, trailR / unit, m_trailColor);
         if (!m_settings.solidTrail) {
-            drawPass(m_trail, filled, trailR * CORE_RATIO, ccc4f(1.f, 1.f, 1.f, 1.f));
+            strokePolyline(m_trail, filled, trailR * CORE_RATIO / unit, ccc4f(1.f, 1.f, 1.f, 1.f));
         }
 
         // ----- wave icon: on top of everything, pointing along the path -----
