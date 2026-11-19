@@ -86,11 +86,30 @@ static void fillPolygon(CCDrawNode* node, std::vector<CCPoint> poly, ccColor4F c
     node->drawPolygon(poly.data(), static_cast<unsigned int>(poly.size()), color, 0.f, ccc4f(0.f, 0.f, 0.f, 0.f));
 }
 
+// Fill a circle (approximated with a many-sided polygon).
+static void fillCircle(CCDrawNode* node, CCPoint const& center, float radius, ccColor4F const& color) {
+    if (radius <= 0.f) return;
+    constexpr int SIDES = 40;
+    std::vector<CCPoint> poly;
+    poly.reserve(SIDES);
+    for (int i = 0; i < SIDES; ++i) {
+        float const a = 2.f * PI_F * static_cast<float>(i) / static_cast<float>(SIDES);
+        poly.push_back(ccp(center.x + std::cos(a) * radius, center.y + std::sin(a) * radius));
+    }
+    fillPolygon(node, poly, color);
+}
+
 // Draw a thick line along a polyline: a rectangle for every segment, plus a
 // mitered wedge on the outside of every turn. Overlaps are harmless because
-// everything is one solid color.
-static void strokePolyline(CCDrawNode* node, std::vector<CCPoint> const& pts, float radius, ccColor4F const& color) {
+// everything is one solid color. The ends can be rounded off with a circle.
+static void strokePolyline(
+    CCDrawNode* node, std::vector<CCPoint> const& pts, float radius, ccColor4F const& color,
+    bool capStart = false, bool capEnd = false
+) {
     if (pts.size() < 2 || radius <= 0.f) return;
+
+    if (capStart) fillCircle(node, pts.front(), radius, color);
+    if (capEnd) fillCircle(node, pts.back(), radius, color);
 
     size_t const n = pts.size();
     std::vector<CCPoint> dir(n - 1);
@@ -594,20 +613,23 @@ public:
                 ccColor4F const white = ccc4f(1.f, 1.f, 1.f, 1.f);
 
                 // The inside of the path is cut out of the outline, so it stays transparent.
-                strokePolyline(m_stencil, full, trailR * r, white);
+                // The ends are rounded, like the original progress bar.
+                strokePolyline(m_stencil, full, trailR * r, white, true, true);
                 // outside to inside: black, white, black
-                strokePolyline(m_track, full, ringOuter * r, black);
-                strokePolyline(m_track, full, ringWhite * r, white);
-                strokePolyline(m_track, full, ringInner * r, black);
+                strokePolyline(m_track, full, ringOuter * r, black, true, true);
+                strokePolyline(m_track, full, ringWhite * r, white, true, true);
+                strokePolyline(m_track, full, ringInner * r, black, true, true);
             }
         }
 
         // ----- the filled part: colored trail with an optional white line ----
         auto filled = localPath(startD, head);
         m_trail->clear();
-        strokePolyline(m_trail, filled, trailR / unit, m_trailColor);
+        // The start of the trail is rounded to fit the rounded start of the path.
+        bool const roundStart = startD <= 0.001f;
+        strokePolyline(m_trail, filled, trailR / unit, m_trailColor, roundStart, false);
         if (!m_settings.solidTrail) {
-            strokePolyline(m_trail, filled, trailR * CORE_RATIO / unit, ccc4f(1.f, 1.f, 1.f, 1.f));
+            strokePolyline(m_trail, filled, trailR * CORE_RATIO / unit, ccc4f(1.f, 1.f, 1.f, 1.f), roundStart, false);
         }
 
         // ----- wave icon: on top of everything, pointing along the path -----
