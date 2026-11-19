@@ -1,0 +1,90 @@
+{
+	"geode": "5.0.0",
+	"gd": {
+		"win": "2.2081",
+		"android": "2.2081",
+		"mac": "2.2081",
+		"ios": "2.2081"
+	},
+	"id": "ljxgod.wave-progress-bar",
+	"name": "Wave Progress Bar",
+	"version": "v1.0.0",
+	"developer": "LJxGOD",
+	"description": "Turns the in-level progress bar into a wave that zigzags along it, using your equipped wave icon.",
+	"repository": "https://github.com/LJxG0D/wave-progress-bar",
+	"tags": ["interface", "customization"],
+	"settings": {
+		"hide-fill": {
+			"type": "bool",
+			"name": "Hide Original Fill",
+			"description": "Hide the normal green progress bar fill so only the wave trail is shown.",
+			"default": true
+		},
+		"icon-scale": {
+			"type": "float",
+			"name": "Wave Icon Scale",
+			"description": "Size of your wave icon on the bar.",
+			"default": 0.3,
+			"min": 0.1,
+			"max": 1.0,
+			"control": {
+				"slider": true,
+				"arrows": true,
+				"input": true
+			}
+		},
+		"zigzag-height": {
+			"type": "float",
+			"name": "Zigzag Height",
+			"description": "How tall the zigzag is, relative to the bar's height. 1.0 fills most of the bar, higher values spill over it.",
+			"default": 1.0,
+			"min": 0.3,
+			"max": 3.0,
+			"control": {
+				"slider": true,
+				"arrows": true,
+				"input": true
+			}
+		},
+		"zigzag-style": {
+			"type": "string",
+			"name": "Zigzag Style",
+			"description": "Classic: even 45 degree zigzag from top to bottom. Chaotic: uneven turns, like a real wave section (the same level always gives the same pattern).",
+			"default": "Classic",
+			"one-of": ["Classic", "Chaotic"]
+		},
+		"trail-thickness": {
+			"type": "float",
+			"name": "Trail Thickness",
+			"description": "Thickness of the wave trail line.",
+			"default": 1.6,
+			"min": 0.5,
+			"max": 6.0,
+			"control": {
+				"slider": true,
+				"arrows": true,
+				"input": true
+			}
+		},
+		"trail-length": {
+			"type": "float",
+			"name": "Trail Length (%)",
+			"description": "How much of the bar the trail covers behind the wave. 100 keeps the whole trail, lower values leave a short tail.",
+			"default": 100.0,
+			"min": 5.0,
+			"max": 100.0,
+			"control": {
+				"slider": true,
+				"arrows": true,
+				"input": true
+			}
+		},
+		"trail-color": {
+			"type": "string",
+			"name": "Trail Color",
+			"description": "Which of your icon colors the trail uses.",
+			"default": "Primary",
+			"one-of": ["Primary", "Secondary"]
+		}
+	}
+}
