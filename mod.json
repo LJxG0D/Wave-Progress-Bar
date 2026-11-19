@@ -8,8 +8,8 @@
 	},
 	"id": "ljxgod.wave-progress-bar",
 	"name": "Wave Progress Bar",
-	"version": "v1.0.1",
-	"developer": "LJxGOD",
+	"version": "v1.0.2",
+	"developer": "LJxG0D",
 	"description": "Turns the in-level progress bar into a wave that zigzags along it, using your equipped wave icon.",
 	"repository": "https://github.com/LJxG0D/Wave-Progress-Bar",
 	"tags": [
@@ -19,8 +19,8 @@
 	"settings": {
 		"hide-fill": {
 			"type": "bool",
-			"name": "Hide Original Fill",
-			"description": "Hide the normal green progress bar fill so only the wave trail is shown.",
+			"name": "Hide Original Progress Bar",
+			"description": "Hide the normal progress bar (track and fill) so only the wave is shown.",
 			"default": true
 		},
 		"icon-scale": {
@@ -62,10 +62,10 @@
 		"trail-thickness": {
 			"type": "float",
 			"name": "Trail Thickness",
-			"description": "Thickness of the wave trail relative to the progress bar. 1.0 is a good default.",
-			"default": 1.0,
+			"description": "Thickness of the wave trail relative to the progress bar. 2.0 matches the size of the wave icon well.",
+			"default": 2.0,
 			"min": 0.3,
-			"max": 3.0,
+			"max": 4.0,
 			"control": {
 				"slider": true,
 				"arrows": true,
@@ -94,6 +94,31 @@
 				"Primary",
 				"Secondary"
 			]
+		},
+		"trail-outline": {
+			"type": "bool",
+			"name": "Trail Outline",
+			"description": "Draw a dark outline around the wave trail, like the vanilla progress bar.",
+			"default": true
+		},
+		"outline-thickness": {
+			"type": "float",
+			"name": "Outline Thickness",
+			"description": "Thickness of the trail outline. 1.0 is a thin border.",
+			"default": 1.0,
+			"min": 0.2,
+			"max": 3.0,
+			"control": {
+				"slider": true,
+				"arrows": true,
+				"input": true
+			}
+		},
+		"white-core": {
+			"type": "bool",
+			"name": "White Core",
+			"description": "Draw a thin white line down the middle of the trail, like the vanilla wave trail.",
+			"default": true
 		}
 	}
 }
