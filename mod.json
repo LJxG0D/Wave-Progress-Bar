@@ -8,7 +8,7 @@
 	},
 	"id": "ljxgod.wave-progress-bar",
 	"name": "Wave Progress Bar",
-	"version": "v1.0.3",
+	"version": "v1.0.4",
 	"developer": "LJxG0D",
 	"description": "Turns the in-level progress bar into a wave that zigzags along it, using your equipped wave icon.",
 	"repository": "https://github.com/LJxG0D/Wave-Progress-Bar",
@@ -98,7 +98,7 @@
 		"trail-outline": {
 			"type": "bool",
 			"name": "Wave Path Outline",
-			"description": "Show the whole path the wave will take, with a black, white, black outline like the vanilla progress bar. The path fills up with the wave trail as you progress.",
+			"description": "Show the whole path the wave will take, with a black, white, black outline like the vanilla progress bar. The inside of the path is transparent and fills up with the wave trail as you progress.",
 			"default": true
 		},
 		"solid-trail": {
