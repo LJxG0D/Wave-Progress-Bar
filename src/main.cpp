@@ -154,7 +154,7 @@ protected:
 
     // ----- hiding the original bar -----------------------------------------
 
-    bool isAncestorOfThis(CCNode* n) const {
+    bool isAncestorOfThis(CCNode* n) {
         for (CCNode* p = this->getParent(); p; p = p->getParent()) {
             if (p == n) return true;
         }
