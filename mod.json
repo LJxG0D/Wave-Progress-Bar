@@ -8,7 +8,7 @@
 	},
 	"id": "ljxgod.wave-progress-bar",
 	"name": "Wave Progress Bar",
-	"version": "v1.0.2",
+	"version": "v1.0.3",
 	"developer": "LJxG0D",
 	"description": "Turns the in-level progress bar into a wave that zigzags along it, using your equipped wave icon.",
 	"repository": "https://github.com/LJxG0D/Wave-Progress-Bar",
@@ -97,28 +97,34 @@
 		},
 		"trail-outline": {
 			"type": "bool",
-			"name": "Trail Outline",
-			"description": "Draw a dark outline around the wave trail, like the vanilla progress bar.",
+			"name": "Wave Path Outline",
+			"description": "Show the whole path the wave will take, with a black, white, black outline like the vanilla progress bar. The path fills up with the wave trail as you progress.",
 			"default": true
 		},
-		"outline-thickness": {
+		"solid-trail": {
+			"type": "bool",
+			"name": "Solid Wave Trail",
+			"description": "Turn this on to remove the thin white line down the middle of the wave trail, so it is one solid color.",
+			"default": false
+		},
+		"mini-wave": {
+			"type": "bool",
+			"name": "Mini Wave",
+			"description": "Use the mini wave: a smaller icon and trail, and a steeper zigzag (about 63 degrees instead of 45).",
+			"default": false
+		},
+		"vertical-offset": {
 			"type": "float",
-			"name": "Outline Thickness",
-			"description": "Thickness of the trail outline. 1.0 is a thin border.",
-			"default": 1.0,
-			"min": 0.2,
+			"name": "Vertical Offset",
+			"description": "Moves the wave down (positive) or up (negative), measured in progress bar heights. The wave is also automatically kept from going past the top of the screen.",
+			"default": 0.0,
+			"min": -1.0,
 			"max": 3.0,
 			"control": {
 				"slider": true,
 				"arrows": true,
 				"input": true
 			}
-		},
-		"white-core": {
-			"type": "bool",
-			"name": "White Core",
-			"description": "Draw a thin white line down the middle of the trail, like the vanilla wave trail.",
-			"default": true
 		}
 	}
 }
