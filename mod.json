@@ -8,11 +8,14 @@
 	},
 	"id": "ljxgod.wave-progress-bar",
 	"name": "Wave Progress Bar",
-	"version": "v1.0.0",
+	"version": "v1.0.1",
 	"developer": "LJxGOD",
 	"description": "Turns the in-level progress bar into a wave that zigzags along it, using your equipped wave icon.",
-	"repository": "https://github.com/LJxG0D/wave-progress-bar",
-	"tags": ["interface", "customization"],
+	"repository": "https://github.com/LJxG0D/Wave-Progress-Bar",
+	"tags": [
+		"interface",
+		"customization"
+	],
 	"settings": {
 		"hide-fill": {
 			"type": "bool",
@@ -23,10 +26,10 @@
 		"icon-scale": {
 			"type": "float",
 			"name": "Wave Icon Scale",
-			"description": "Size of your wave icon on the bar.",
-			"default": 0.3,
-			"min": 0.1,
-			"max": 1.0,
+			"description": "Size of your wave icon relative to the progress bar. 1.0 is about the height of the bar.",
+			"default": 1.0,
+			"min": 0.3,
+			"max": 3.0,
 			"control": {
 				"slider": true,
 				"arrows": true,
@@ -51,15 +54,18 @@
 			"name": "Zigzag Style",
 			"description": "Classic: even 45 degree zigzag from top to bottom. Chaotic: uneven turns, like a real wave section (the same level always gives the same pattern).",
 			"default": "Classic",
-			"one-of": ["Classic", "Chaotic"]
+			"one-of": [
+				"Classic",
+				"Chaotic"
+			]
 		},
 		"trail-thickness": {
 			"type": "float",
 			"name": "Trail Thickness",
-			"description": "Thickness of the wave trail line.",
-			"default": 1.6,
-			"min": 0.5,
-			"max": 6.0,
+			"description": "Thickness of the wave trail relative to the progress bar. 1.0 is a good default.",
+			"default": 1.0,
+			"min": 0.3,
+			"max": 3.0,
 			"control": {
 				"slider": true,
 				"arrows": true,
@@ -84,7 +90,10 @@
 			"name": "Trail Color",
 			"description": "Which of your icon colors the trail uses.",
 			"default": "Primary",
-			"one-of": ["Primary", "Secondary"]
+			"one-of": [
+				"Primary",
+				"Secondary"
+			]
 		}
 	}
 }
