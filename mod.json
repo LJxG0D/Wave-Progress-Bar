@@ -8,8 +8,8 @@
 	},
 	"id": "ljxgod.wave-progress-bar",
 	"name": "Wave Progress Bar",
-	"version": "v1.0.5",
-	"developer": "LJxG0D",
+	"version": "v1.0.0",
+	"developer": "LJxGOD",
 	"description": "Turns the in-level progress bar into a wave that zigzags along it, using your equipped wave icon.",
 	"repository": "https://github.com/LJxG0D/Wave-Progress-Bar",
 	"tags": [
