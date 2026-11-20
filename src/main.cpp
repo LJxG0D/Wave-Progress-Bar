@@ -625,8 +625,9 @@ public:
         // ----- the filled part: colored trail with an optional white line ----
         auto filled = localPath(startD, head);
         m_trail->clear();
-        // The start of the trail is rounded to fit the rounded start of the path.
-        bool const roundStart = startD <= 0.001f;
+        // The start of the trail is rounded to fit the rounded start of the path
+        // outline. With the outline turned off, it stays flat.
+        bool const roundStart = m_settings.pathOutline && startD <= 0.001f;
         strokePolyline(m_trail, filled, trailR / unit, m_trailColor, roundStart, false);
         if (!m_settings.solidTrail) {
             strokePolyline(m_trail, filled, trailR * CORE_RATIO / unit, ccc4f(1.f, 1.f, 1.f, 1.f), roundStart, false);
